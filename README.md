@@ -1,4 +1,4 @@
-# IPTV M3U Updater
+# my-iptv-m3u
 
 每日自动更新 IPTV 直播源 M3U。
 
@@ -10,10 +10,8 @@
 
 ## APTV 订阅地址
 
-上传到 GitHub 后，APTV 使用这个格式：
+APTV 使用这个订阅地址：
 
 ```text
-https://raw.githubusercontent.com/<你的GitHub用户名>/<仓库名>/main/output/index.m3u
+https://raw.githubusercontent.com/James01H/my-iptv-m3u/main/output/index.m3u
 ```
-
-如果默认分支是 `master`，把链接里的 `main` 改成 `master`。
