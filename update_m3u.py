@@ -85,6 +85,7 @@ SATELLITE_KEYWORDS = (
     "浙江 tv",
     "zhejiang tv",
 )
+NON_STREAM_SUFFIXES = (".txt", ".md", ".html", ".htm", ".xml", ".json", ".gz")
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
@@ -156,6 +157,18 @@ def normalize_text(text: str) -> str:
     return " ".join(text.lower().replace("-", " ").replace("_", " ").split())
 
 
+def is_probable_stream_url(stream_url: str) -> bool:
+    lower_url = stream_url.strip().lower()
+    clean_url = lower_url.split("?", 1)[0].rstrip("/")
+    if not lower_url.startswith(("http://", "https://", "rtmp://", "rtsp://")):
+        return False
+    if "raw.githubusercontent.com" in lower_url or "github.com" in lower_url:
+        return False
+    if clean_url.endswith(NON_STREAM_SUFFIXES):
+        return False
+    return True
+
+
 def is_cctv_channel(extinf: str) -> bool:
     name = normalize_text(channel_name(extinf))
     info = normalize_text(extinf)
@@ -183,6 +196,8 @@ def merge_channels(playlists: Iterable[str]) -> list[tuple[str, str]]:
 
     for playlist in playlists:
         for extinf, stream_url in iter_channels(playlist):
+            if not is_probable_stream_url(stream_url):
+                continue
             if not is_wanted_channel(extinf, stream_url):
                 continue
             if stream_url in seen_urls:
@@ -218,6 +233,13 @@ def main() -> int:
             playlists.append(text)
 
     channels = merge_channels(playlists)
+    if sources and not playlists:
+        logging.error("所有源都下载失败，保留现有输出文件不覆盖。")
+        return 1
+    if sources and not channels:
+        logging.error("过滤后没有可用频道，保留现有输出文件不覆盖。")
+        return 1
+
     write_output(OUTPUT_FILE, channels)
 
     logging.info("本次成功下载源数量: %d/%d", len(playlists), len(sources))
