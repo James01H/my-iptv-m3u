@@ -6,6 +6,7 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 import logging
+import os
 import re
 import time
 from pathlib import Path
@@ -20,6 +21,7 @@ OUTPUT_FILE = Path("output/index.m3u")
 TIMEOUT_SECONDS = 15
 STREAM_TEST_TIMEOUT_SECONDS = 8
 MAX_TEST_WORKERS = 24
+ENABLE_STREAM_TEST = os.getenv("CHECK_STREAMS") == "1"
 INCLUDE_ALL_SOURCES = {
     "https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
     "https://raw.githubusercontent.com/YanG-1989/m3u/main/Migu.m3u",
@@ -108,6 +110,8 @@ class Channel:
     stream_url: str
     source_url: str
     source_order: int
+    entry_order: int
+    lines: tuple[str, ...]
 
 
 @dataclass(frozen=True)
@@ -148,9 +152,10 @@ def download_m3u(url: str) -> Optional[str]:
         return None
 
 
-def iter_channels(m3u_text: str) -> Iterable[tuple[str, str]]:
-    """Yield (#EXTINF line, stream URL) pairs from an M3U playlist."""
+def iter_channels(m3u_text: str) -> Iterable[tuple[str, str, tuple[str, ...]]]:
+    """Yield (#EXTINF line, stream URL, full entry lines) from an M3U playlist."""
     pending_extinf: Optional[str] = None
+    entry_lines: list[str] = []
 
     for raw_line in m3u_text.splitlines():
         line = raw_line.strip()
@@ -162,14 +167,20 @@ def iter_channels(m3u_text: str) -> Iterable[tuple[str, str]]:
 
         if line.startswith("#EXTINF"):
             pending_extinf = line
+            entry_lines = [line]
+            continue
+
+        if line.startswith("#") and pending_extinf:
+            entry_lines.append(line)
             continue
 
         if line.startswith("#"):
             continue
 
         if pending_extinf:
-            yield pending_extinf, line
+            yield pending_extinf, line, tuple(entry_lines + [line])
             pending_extinf = None
+            entry_lines = []
 
 
 def channel_name(extinf: str) -> str:
@@ -225,7 +236,9 @@ def merge_channels(playlists: Iterable[tuple[str, str]]) -> list[Channel]:
 
     for source_order, (source_url, playlist) in enumerate(playlists):
         include_all = should_include_all(source_url)
-        for extinf, stream_url in iter_channels(playlist):
+        for entry_order, (extinf, stream_url, entry_lines) in enumerate(
+            iter_channels(playlist)
+        ):
             if not is_probable_stream_url(stream_url):
                 continue
             if not include_all and not is_wanted_channel(extinf, stream_url):
@@ -233,7 +246,16 @@ def merge_channels(playlists: Iterable[tuple[str, str]]) -> list[Channel]:
             if stream_url in seen_urls:
                 continue
             seen_urls.add(stream_url)
-            merged.append(Channel(extinf, stream_url, source_url, source_order))
+            merged.append(
+                Channel(
+                    extinf,
+                    stream_url,
+                    source_url,
+                    source_order,
+                    entry_order,
+                    entry_lines,
+                )
+            )
 
     return merged
 
@@ -298,8 +320,17 @@ def write_output(path: Path, channels: Iterable[TestedChannel]) -> None:
 
     lines = ["#EXTM3U"]
     for tested in channels:
-        lines.append(tested.channel.extinf)
-        lines.append(tested.channel.stream_url)
+        lines.extend(tested.channel.lines)
+
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def write_channels_output(path: Path, channels: Iterable[Channel]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+
+    lines = ["#EXTM3U"]
+    for channel in channels:
+        lines.extend(channel.lines)
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -331,16 +362,24 @@ def main() -> int:
         logging.error("过滤后没有可用频道，保留现有输出文件不覆盖。")
         return 1
 
-    tested_channels = test_channels(channels)
-    if sources and not tested_channels:
-        logging.error("检测后没有可用频道，保留现有输出文件不覆盖。")
-        return 1
-
-    write_output(OUTPUT_FILE, tested_channels)
+    if ENABLE_STREAM_TEST:
+        tested_channels = test_channels(channels)
+        if sources and not tested_channels:
+            logging.error("检测后没有可用频道，保留现有输出文件不覆盖。")
+            return 1
+        write_output(OUTPUT_FILE, tested_channels)
+        output_count = len(tested_channels)
+    else:
+        write_channels_output(OUTPUT_FILE, channels)
+        output_count = len(channels)
 
     logging.info("本次成功下载源数量: %d/%d", downloaded_count, len(sources))
     logging.info("合并去重后候选频道数量: %d", len(channels))
-    logging.info("检测可用频道数量: %d", len(tested_channels))
+    if ENABLE_STREAM_TEST:
+        logging.info("检测可用频道数量: %d", output_count)
+    else:
+        logging.info("未启用测速检测，保留原始可播放参数。")
+    logging.info("输出频道数量: %d", output_count)
     logging.info("已输出到: %s", OUTPUT_FILE)
     return 0
 
