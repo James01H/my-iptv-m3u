@@ -24,3 +24,17 @@ APTV 使用这个订阅地址：
 ```text
 https://raw.githubusercontent.com/James01H/my-iptv-m3u/main/output/index.m3u
 ```
+
+## 手工整理列表
+
+咪咕和 CCTV 整理列表：
+
+```text
+https://raw.githubusercontent.com/James01H/my-iptv-m3u/main/整理后的直播链接/频道对应链接.m3u
+```
+
+频道与链接对照：
+
+```text
+https://raw.githubusercontent.com/James01H/my-iptv-m3u/main/整理后的直播链接/频道对应链接.md
+```
