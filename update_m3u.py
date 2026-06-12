@@ -3,19 +3,27 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 import logging
 import re
+import time
 from pathlib import Path
-from typing import Iterable, Optional
+from typing import Iterable, Optional, Sequence
 from urllib.error import HTTPError, URLError
 from urllib.request import Request, urlopen
 
 
 SOURCES_FILE = Path("sources.txt")
+MANUAL_CHANNELS_FILE = Path("manual_channels.m3u")
 OUTPUT_FILE = Path("output/index.m3u")
 TIMEOUT_SECONDS = 15
+STREAM_TEST_TIMEOUT_SECONDS = 8
+MAX_TEST_WORKERS = 24
 INCLUDE_ALL_SOURCES = {
     "https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
+    "https://raw.githubusercontent.com/YanG-1989/m3u/main/Migu.m3u",
+    str(MANUAL_CHANNELS_FILE),
 }
 
 CCTV_KEYWORDS = ("cctv", "央视", "中央电视")
@@ -92,6 +100,20 @@ NON_STREAM_SUFFIXES = (".txt", ".md", ".html", ".htm", ".xml", ".json", ".gz")
 
 
 logging.basicConfig(level=logging.INFO, format="%(levelname)s: %(message)s")
+
+
+@dataclass(frozen=True)
+class Channel:
+    extinf: str
+    stream_url: str
+    source_url: str
+    source_order: int
+
+
+@dataclass(frozen=True)
+class TestedChannel:
+    channel: Channel
+    latency_ms: int
 
 
 def read_sources(path: Path) -> list[str]:
@@ -197,11 +219,11 @@ def should_include_all(source_url: str) -> bool:
     return source_url in INCLUDE_ALL_SOURCES
 
 
-def merge_channels(playlists: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
+def merge_channels(playlists: Iterable[tuple[str, str]]) -> list[Channel]:
     seen_urls: set[str] = set()
-    merged: list[tuple[str, str]] = []
+    merged: list[Channel] = []
 
-    for source_url, playlist in playlists:
+    for source_order, (source_url, playlist) in enumerate(playlists):
         include_all = should_include_all(source_url)
         for extinf, stream_url in iter_channels(playlist):
             if not is_probable_stream_url(stream_url):
@@ -211,18 +233,73 @@ def merge_channels(playlists: Iterable[tuple[str, str]]) -> list[tuple[str, str]
             if stream_url in seen_urls:
                 continue
             seen_urls.add(stream_url)
-            merged.append((extinf, stream_url))
+            merged.append(Channel(extinf, stream_url, source_url, source_order))
 
     return merged
 
 
-def write_output(path: Path, channels: Iterable[tuple[str, str]]) -> None:
+def test_stream(channel: Channel) -> Optional[TestedChannel]:
+    request = Request(
+        channel.stream_url,
+        headers={
+            "User-Agent": "Mozilla/5.0 (compatible; IPTV-M3U-Updater/1.0)",
+            "Range": "bytes=0-4095",
+        },
+    )
+    started_at = time.monotonic()
+
+    try:
+        with urlopen(request, timeout=STREAM_TEST_TIMEOUT_SECONDS) as response:
+            status = getattr(response, "status", 200)
+            if status >= 400:
+                return None
+            response.read(4096)
+    except (HTTPError, URLError, TimeoutError, OSError):
+        return None
+
+    latency_ms = int((time.monotonic() - started_at) * 1000)
+    return TestedChannel(channel, latency_ms)
+
+
+def test_channels(channels: Sequence[Channel]) -> list[TestedChannel]:
+    if not channels:
+        return []
+
+    working: list[TestedChannel] = []
+    max_workers = min(MAX_TEST_WORKERS, len(channels))
+    with ThreadPoolExecutor(max_workers=max_workers) as executor:
+        future_to_channel = {
+            executor.submit(test_stream, channel): channel for channel in channels
+        }
+        for checked_count, future in enumerate(as_completed(future_to_channel), 1):
+            tested = future.result()
+            if tested is not None:
+                working.append(tested)
+            if checked_count % 100 == 0 or checked_count == len(channels):
+                logging.info(
+                    "已检测频道: %d/%d，可用: %d",
+                    checked_count,
+                    len(channels),
+                    len(working),
+                )
+
+    return sorted(
+        working,
+        key=lambda item: (
+            normalize_text(channel_name(item.channel.extinf)),
+            item.latency_ms,
+            item.channel.source_order,
+        ),
+    )
+
+
+def write_output(path: Path, channels: Iterable[TestedChannel]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
 
     lines = ["#EXTM3U"]
-    for extinf, stream_url in channels:
-        lines.append(extinf)
-        lines.append(stream_url)
+    for tested in channels:
+        lines.append(tested.channel.extinf)
+        lines.append(tested.channel.stream_url)
 
     path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
@@ -235,23 +312,35 @@ def main() -> int:
         return 1
 
     playlists: list[tuple[str, str]] = []
+    if MANUAL_CHANNELS_FILE.exists():
+        playlists.append(
+            (str(MANUAL_CHANNELS_FILE), MANUAL_CHANNELS_FILE.read_text(encoding="utf-8"))
+        )
+
     for source_url in sources:
         text = download_m3u(source_url)
         if text is not None:
             playlists.append((source_url, text))
 
     channels = merge_channels(playlists)
-    if sources and not playlists:
+    downloaded_count = max(len(playlists) - int(MANUAL_CHANNELS_FILE.exists()), 0)
+    if sources and downloaded_count == 0:
         logging.error("所有源都下载失败，保留现有输出文件不覆盖。")
         return 1
     if sources and not channels:
         logging.error("过滤后没有可用频道，保留现有输出文件不覆盖。")
         return 1
 
-    write_output(OUTPUT_FILE, channels)
+    tested_channels = test_channels(channels)
+    if sources and not tested_channels:
+        logging.error("检测后没有可用频道，保留现有输出文件不覆盖。")
+        return 1
 
-    logging.info("本次成功下载源数量: %d/%d", len(playlists), len(sources))
-    logging.info("合并去重后频道数量: %d", len(channels))
+    write_output(OUTPUT_FILE, tested_channels)
+
+    logging.info("本次成功下载源数量: %d/%d", downloaded_count, len(sources))
+    logging.info("合并去重后候选频道数量: %d", len(channels))
+    logging.info("检测可用频道数量: %d", len(tested_channels))
     logging.info("已输出到: %s", OUTPUT_FILE)
     return 0
 

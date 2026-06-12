@@ -1,0 +1,5 @@
+#EXTM3U
+# 手工添加：来自 https://zilong7728.github.io/Collect-IPTV/
+# 备注：用户反馈该线路可播放，作为新版 CCTV 备用源保留。
+#EXTINF:-1 tvg-name="CCTV-1" group-title="CCTV",CCTV-1 综合（Collect-IPTV 备用源）
+http://112.27.235.94:8000/hls/1/index.m3u8

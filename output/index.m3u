@@ -1,4 +1,6 @@
 #EXTM3U
+#EXTINF:-1 tvg-name="CCTV-1" group-title="CCTV",CCTV-1 综合（Collect-IPTV 备用源）
+http://112.27.235.94:8000/hls/1/index.m3u8
 #EXTINF:-1 tvg-id="BeijingSatelliteTV.cn@HD" tvg-logo="https://i.imgur.com/vsktAez.png" group-title="General",BRTV 北京卫视 (1080p)
 http://go.bkpcp.top/mg/bjws
 #EXTINF:-1 tvg-id="CCTVPlus1.cn@SD" tvg-logo="https://i.imgur.com/U8d4Is6.png" group-title="News",CCTV+ 1 (600p) [Not 24/7]
