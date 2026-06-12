@@ -14,6 +14,9 @@ from urllib.request import Request, urlopen
 SOURCES_FILE = Path("sources.txt")
 OUTPUT_FILE = Path("output/index.m3u")
 TIMEOUT_SECONDS = 15
+INCLUDE_ALL_SOURCES = {
+    "https://raw.githubusercontent.com/YanG-1989/m3u/main/Gather.m3u",
+}
 
 CCTV_KEYWORDS = ("cctv", "央视", "中央电视")
 MIGU_KEYWORDS = ("咪咕", "migu", "miguvideo")
@@ -190,15 +193,20 @@ def is_wanted_channel(extinf: str, stream_url: str) -> bool:
     )
 
 
-def merge_channels(playlists: Iterable[str]) -> list[tuple[str, str]]:
+def should_include_all(source_url: str) -> bool:
+    return source_url in INCLUDE_ALL_SOURCES
+
+
+def merge_channels(playlists: Iterable[tuple[str, str]]) -> list[tuple[str, str]]:
     seen_urls: set[str] = set()
     merged: list[tuple[str, str]] = []
 
-    for playlist in playlists:
+    for source_url, playlist in playlists:
+        include_all = should_include_all(source_url)
         for extinf, stream_url in iter_channels(playlist):
             if not is_probable_stream_url(stream_url):
                 continue
-            if not is_wanted_channel(extinf, stream_url):
+            if not include_all and not is_wanted_channel(extinf, stream_url):
                 continue
             if stream_url in seen_urls:
                 continue
@@ -226,11 +234,11 @@ def main() -> int:
         logging.error("%s", exc)
         return 1
 
-    playlists: list[str] = []
+    playlists: list[tuple[str, str]] = []
     for source_url in sources:
         text = download_m3u(source_url)
         if text is not None:
-            playlists.append(text)
+            playlists.append((source_url, text))
 
     channels = merge_channels(playlists)
     if sources and not playlists:
