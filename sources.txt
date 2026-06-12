@@ -1,2 +1,4 @@
 # 每行放一个 M3U 地址。
 # 空行和以 # 开头的注释行会被自动跳过。
+https://iptv-org.github.io/iptv/index.m3u
+https://raw.githubusercontent.com/Free-TV/IPTV/master/playlist.m3u8
